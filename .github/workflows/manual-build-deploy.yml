@@ -137,6 +137,15 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
     steps:
+      - name: Free Runner Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo swapoff -a
+          sudo rm -f /swapfile
+
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
