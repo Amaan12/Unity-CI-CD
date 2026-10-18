@@ -1,11 +1,27 @@
 # Unity CI/CD On-Demand Appliance
 
-A clean, turnkey GitHub Actions pipeline for Unity game development:
+Turnkey GitHub Actions pipelines for Unity game development and store releases.
+
+---
+
+## 1. Manual Build & Deploy (`manual-build-deploy.yml`)
+
+A button-triggered on-demand compilation and distribution pipeline:
 * **Manual button-triggered builds (`workflow_dispatch`)** — 0 minutes burned on normal commits.
 * **Auto-incrementing version numbers:** `$GAME_NAME-$VERSION-$PLATFORM-$ARCHITECTURE-$SCRIPTING_BACKEND` (e.g. `TemplateProject-1.0.1-PC-Windows-x64-Mono.zip`).
 * **Multi-platform selection:** Interactive checkboxes for Windows, WebGL, Android, macOS, and Linux that compile concurrently in parallel runners.
 * **Smart CD Routing:** Choose between direct download (`raw_download`), Itch.io (Butler channel tags), Steam (SteamCMD), or both.
 * **Automatic artifact cleanup:** Zips expire after 7 days to preserve storage quota.
+
+---
+
+## 2. Mirror Itch Test to Production (`itch-test-prod-mirror.yml`)
+
+A cloud-based promotion pipeline to mirror verified test builds to your live production page:
+* **Headless Cloud Mirroring:** Runs entirely on GitHub Actions runners at datacenter speeds — zero local downloading or bandwidth used on your machine.
+* **Auto-Channel Discovery:** Automatically inspects your Itch test page, detects all active platform channels (`windows`, `html5`, `osx`, `linux`, etc.), and mirrors them all.
+* **Simple 3-Parameter Input:** Accepts `itch_user`, `test_page`, and `prod_page` via GitHub's "Run workflow" GUI or GitHub CLI.
+* **Secure Authorization:** Uses repository secret `BUTLER_API_KEY` to authenticate and push builds between pages.
 
 ---
 
@@ -26,7 +42,7 @@ git clone --depth=1 https://github.com/Amaan12/Unity-CI-CD.git _temp_ci && cp -r
 Once copied:
 ```bash
 git add .github/
-git commit -m "ci: add manual on-demand build and deploy workflow"
+git commit -m "ci: add manual on-demand build and deploy workflows"
 git push origin main
 ```
 
