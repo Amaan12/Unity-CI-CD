@@ -186,6 +186,64 @@ jobs:
           path: build/${{ env.BUILD_LABEL }}
           retention-days: 7
 
+      - name: Notify Discord on Build Completion
+        if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL is not set. Skipping."
+            exit 0
+          fi
+
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS_TITLE="✅ Build Succeeded: ${{ env.GAME_NAME }}"
+            STATUS_TEXT="Success"
+            COLOR=3066993
+          elif [ "${{ job.status }}" = "failure" ]; then
+            STATUS_TITLE="❌ Build Failed: ${{ env.GAME_NAME }}"
+            STATUS_TEXT="Failure"
+            COLOR=15158332
+          else
+            STATUS_TITLE="⚠️ Build ${{ job.status }}: ${{ env.GAME_NAME }}"
+            STATUS_TEXT="${{ job.status }}"
+            COLOR=16776960
+          fi
+
+          TARGET="${{ matrix.platform }} (${{ matrix.architecture }}, ${{ matrix.backend }})"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          PAYLOAD=$(jq -n \
+            --arg title "$STATUS_TITLE" \
+            --arg desc "Unity build job finished with status: **$STATUS_TEXT**" \
+            --argjson color "$COLOR" \
+            --arg url "$RUN_URL" \
+            --arg platform "$TARGET" \
+            --arg version "${{ env.VERSION }}" \
+            --arg repo "${{ github.repository }}" \
+            --arg actor "${{ github.actor }}" \
+            '{
+              username: "Unity Build Bot",
+              avatar_url: "https://raw.githubusercontent.com/game-ci/documentation/main/src/pages/images/game-ci-brand.png",
+              embeds: [
+                {
+                  title: $title,
+                  url: $url,
+                  description: $desc,
+                  color: $color,
+                  fields: [
+                    { name: "Target Platform", value: $platform, inline: true },
+                    { name: "Version", value: $version, inline: true },
+                    { name: "Triggered By", value: $actor, inline: true }
+                  ],
+                  footer: { text: $repo },
+                  timestamp: (now | todate)
+                }
+              ]
+            }')
+
+          curl -s -H "Content-Type: application/json" -X POST -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL" || true
+
   # 3. Deploy to Itch.io (Conditional)
   deploy-itch:
     needs: [setup-matrix, build]
@@ -219,6 +277,51 @@ jobs:
           # Pushes to channel e.g. 'windows', 'html5', 'android' and sets version tag
           ./butler push output/ $ITCH_USER/$ITCH_GAME:${{ matrix.itchChannel }} --userversion ${{ env.VERSION }}
 
+      - name: Notify Discord on Itch.io Deploy
+        if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL is not set. Skipping."
+            exit 0
+          fi
+
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS_TITLE="🚀 Deployed to Itch.io: ${{ env.GAME_NAME }}"
+            COLOR=3066993
+          else
+            STATUS_TITLE="❌ Itch.io Deploy Failed: ${{ env.GAME_NAME }}"
+            COLOR=15158332
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          PAYLOAD=$(jq -n \
+            --arg title "$STATUS_TITLE" \
+            --argjson color "$COLOR" \
+            --arg url "$RUN_URL" \
+            --arg game "${{ vars.ITCH_USER }}/${{ vars.ITCH_GAME }}:${{ matrix.itchChannel }}" \
+            --arg version "${{ env.VERSION }}" \
+            '{
+              username: "Unity Build Bot",
+              avatar_url: "https://raw.githubusercontent.com/game-ci/documentation/main/src/pages/images/game-ci-brand.png",
+              embeds: [
+                {
+                  title: $title,
+                  url: $url,
+                  color: $color,
+                  fields: [
+                    { name: "Itch Target", value: $game, inline: true },
+                    { name: "Version", value: $version, inline: true }
+                  ],
+                  timestamp: (now | todate)
+                }
+              ]
+            }')
+
+          curl -s -H "Content-Type: application/json" -X POST -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL" || true
+
   # 4. Deploy to Steam (Conditional)
   deploy-steam:
     needs: [setup-matrix, build]
@@ -249,3 +352,48 @@ jobs:
           buildDescription: "${{ env.BUILD_LABEL }}"
           rootPath: output/
           depot1Path: output/
+
+      - name: Notify Discord on Steam Deploy
+        if: always()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL is not set. Skipping."
+            exit 0
+          fi
+
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS_TITLE="🚀 Deployed to Steam: ${{ env.GAME_NAME }}"
+            COLOR=3066993
+          else
+            STATUS_TITLE="❌ Steam Deploy Failed: ${{ env.GAME_NAME }}"
+            COLOR=15158332
+          fi
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          PAYLOAD=$(jq -n \
+            --arg title "$STATUS_TITLE" \
+            --argjson color "$COLOR" \
+            --arg url "$RUN_URL" \
+            --arg app "${{ vars.STEAM_APP_ID }}" \
+            --arg version "${{ env.VERSION }}" \
+            '{
+              username: "Unity Build Bot",
+              avatar_url: "https://raw.githubusercontent.com/game-ci/documentation/main/src/pages/images/game-ci-brand.png",
+              embeds: [
+                {
+                  title: $title,
+                  url: $url,
+                  color: $color,
+                  fields: [
+                    { name: "Steam App ID", value: $app, inline: true },
+                    { name: "Version", value: $version, inline: true }
+                  ],
+                  timestamp: (now | todate)
+                }
+              ]
+            }')
+
+          curl -s -H "Content-Type: application/json" -X POST -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL" || true
