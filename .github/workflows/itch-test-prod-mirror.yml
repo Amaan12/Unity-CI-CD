@@ -1,0 +1,154 @@
+name: Mirror Itch Test to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      itch_user:
+        description: "Itch Username / Studio Name"
+        type: string
+        required: true
+      test_page:
+        description: "Test Game Page Slug (e.g. my-game-test)"
+        type: string
+        required: true
+      prod_page:
+        description: "Production Game Page Slug (e.g. my-game-prod)"
+        type: string
+        required: true
+
+jobs:
+  mirror:
+    name: Mirror Itch Builds (${{ inputs.test_page }} -> ${{ inputs.prod_page }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Inputs
+        run: |
+          if [ -z "${{ inputs.itch_user }}" ] || [ -z "${{ inputs.test_page }}" ] || [ -z "${{ inputs.prod_page }}" ]; then
+            echo "::error::All three parameters (itch_user, test_page, prod_page) must be provided."
+            exit 1
+          fi
+
+      - name: Install Butler
+        run: |
+          curl -L -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip
+          chmod +x butler
+          ./butler -V
+
+      - name: Mirror Channels from Test to Production
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          ITCH_USER: ${{ inputs.itch_user }}
+          TEST_PAGE: ${{ inputs.test_page }}
+          PROD_PAGE: ${{ inputs.prod_page }}
+        run: |
+          python3 - << 'EOF'
+          import subprocess
+          import json
+          import re
+          import os
+          import sys
+
+          user = os.environ.get("ITCH_USER", "").strip()
+          test_page = os.environ.get("TEST_PAGE", "").strip()
+          prod_page = os.environ.get("PROD_PAGE", "").strip()
+
+          if not user or not test_page or not prod_page:
+              print("Missing required environment variables.")
+              sys.exit(1)
+
+          target_test = f"{user}/{test_page}"
+          target_prod = f"{user}/{prod_page}"
+
+          print("==================================================")
+          print(f"Source (Test):       {target_test}")
+          print(f"Destination (Prod):  {target_prod}")
+          print("==================================================")
+
+          # 1. Query status of test project
+          status_res = subprocess.run(
+              ["./butler", "status", target_test],
+              capture_output=True,
+              text=True
+          )
+
+          print("Butler status output:")
+          print(status_res.stdout)
+          if status_res.stderr:
+              print(status_res.stderr, file=sys.stderr)
+
+          if status_res.returncode != 0:
+              print(f"Error querying status for {target_test}. Verify page name and BUTLER_API_KEY.")
+              sys.exit(status_res.returncode)
+
+          # 2. Extract channel names from status table
+          channels = []
+          for line in status_res.stdout.splitlines():
+              match = re.match(r'^\s*\|\s*([a-zA-Z0-9_\-\.]+)\s*\|', line)
+              if match:
+                  ch = match.group(1).strip()
+                  if ch.upper() != "CHANNEL" and ch not in channels:
+                      channels.append(ch)
+
+          # Fallback: check status --json if table parsing yielded no channels
+          if not channels:
+              json_res = subprocess.run(
+                  ["./butler", "status", target_test, "--json"],
+                  capture_output=True,
+                  text=True
+              )
+              for line in json_res.stdout.splitlines():
+                  try:
+                      data = json.loads(line)
+                      if "channels" in data:
+                          if isinstance(data["channels"], list):
+                              for c in data["channels"]:
+                                  if "name" in c and c["name"] not in channels:
+                                      channels.append(c["name"])
+                          elif isinstance(data["channels"], dict):
+                              for k in data["channels"].keys():
+                                  if k not in channels:
+                                      channels.append(k)
+                  except json.JSONDecodeError:
+                      pass
+
+          if not channels:
+              print("No active channels found on test page to mirror.")
+              sys.exit(1)
+
+          print(f"Found channels to mirror: {channels}")
+
+          # 3. Mirror each channel (download from test -> push to prod)
+          for ch in channels:
+              print(f"\n--------------------------------------------------")
+              print(f"Mirroring channel: {ch}")
+              print(f"--------------------------------------------------")
+
+              temp_dir = f"./_temp_build_{ch}"
+              if os.path.exists(temp_dir):
+                  subprocess.run(["rm", "-rf", temp_dir])
+
+              # Step A: Download build from test page
+              print(f"[1/2] Downloading {target_test}:{ch}...")
+              dl_res = subprocess.run(["./butler", "dl", f"{target_test}:{ch}", temp_dir])
+              if dl_res.returncode != 0:
+                  print(f"Failed to download channel '{ch}'. Aborting.")
+                  sys.exit(dl_res.returncode)
+
+              # Step B: Push build to production page
+              print(f"[2/2] Pushing to {target_prod}:{ch}...")
+              push_res = subprocess.run(["./butler", "push", temp_dir, f"{target_prod}:{ch}"])
+              
+              # Step C: Clean up temp directory
+              subprocess.run(["rm", "-rf", temp_dir])
+
+              if push_res.returncode != 0:
+                  print(f"Failed to push channel '{ch}' to {target_prod}. Aborting.")
+                  sys.exit(push_res.returncode)
+
+              print(f"Channel '{ch}' mirrored successfully!")
+
+          print("\n==================================================")
+          print("All channels mirrored to production successfully!")
+          print("==================================================")
+          EOF
