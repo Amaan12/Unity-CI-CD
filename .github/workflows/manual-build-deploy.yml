@@ -35,17 +35,19 @@ on:
           - "Mono"
           - "IL2CPP"
 
-      # CD Target (Dropdown)
-      deploy_target:
-        description: "Deployment Destination"
-        type: choice
-        required: true
-        default: "raw_download"
-        options:
-          - "raw_download"
-          - "itch"
-          - "steam"
-          - "both"
+      # Delivery & Deployment Destinations (Checkboxes)
+      raw_download:
+        description: "Save Build Artifact (Direct .zip Download)"
+        type: boolean
+        default: true
+      deploy_itch:
+        description: "Deploy to Itch.io"
+        type: boolean
+        default: false
+      deploy_steam:
+        description: "Deploy to Steam"
+        type: boolean
+        default: false
 
 env:
   GAME_NAME: ${{ github.event.repository.name }}
@@ -126,7 +128,7 @@ jobs:
           echo "matrix=$COMPACT_MATRIX" >> $GITHUB_OUTPUT
           echo "has_platforms=$COUNT" >> $GITHUB_OUTPUT
 
-  # 2. Build each selected platform in parallel
+  # 2. Build and optionally deploy each selected platform on the same runner
   build:
     needs: setup-matrix
     if: needs.setup-matrix.outputs.has_platforms != '0'
@@ -161,6 +163,7 @@ jobs:
             Library-
 
       - name: Build Unity Project
+        id: unity-builder
         uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -180,6 +183,7 @@ jobs:
           mv "build/${{ matrix.targetPlatform }}" "build/$BUILD_LABEL"
 
       - name: Upload Build Artifact (.zip)
+        if: inputs.raw_download
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.BUILD_LABEL }}
@@ -196,17 +200,17 @@ jobs:
             exit 0
           fi
 
-          if [ "${{ job.status }}" = "success" ]; then
+          if [ "${{ steps.unity-builder.outcome }}" = "success" ]; then
             STATUS_TITLE="✅ Build Succeeded: ${{ env.GAME_NAME }}"
             STATUS_TEXT="Success"
             COLOR=3066993
-          elif [ "${{ job.status }}" = "failure" ]; then
+          elif [ "${{ steps.unity-builder.outcome }}" = "failure" ]; then
             STATUS_TITLE="❌ Build Failed: ${{ env.GAME_NAME }}"
             STATUS_TEXT="Failure"
             COLOR=15158332
           else
-            STATUS_TITLE="⚠️ Build ${{ job.status }}: ${{ env.GAME_NAME }}"
-            STATUS_TEXT="${{ job.status }}"
+            STATUS_TITLE="⚠️ Build ${{ steps.unity-builder.outcome }}: ${{ env.GAME_NAME }}"
+            STATUS_TEXT="${{ steps.unity-builder.outcome }}"
             COLOR=16776960
           fi
 
@@ -244,28 +248,30 @@ jobs:
 
           curl -s -H "Content-Type: application/json" -X POST -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL" || true
 
-  # 3. Deploy to Itch.io (Conditional)
-  deploy-itch:
-    needs: [setup-matrix, build]
-    if: inputs.deploy_target == 'itch' || inputs.deploy_target == 'both'
-    name: Itch.io (${{ matrix.platform }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
-    steps:
-      - name: Set Build Label
+      # --- Deploy to Itch.io ---
+      - name: Validate Itch.io Credentials
+        id: validate-itch
+        if: steps.unity-builder.outcome == 'success' && inputs.deploy_itch
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          ITCH_USER: ${{ vars.ITCH_USER }}
+          ITCH_GAME: ${{ vars.ITCH_GAME }}
         run: |
-          BUILD_LABEL="${{ env.GAME_NAME }}-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.architecture }}-${{ matrix.backend }}"
-          echo "BUILD_LABEL=$BUILD_LABEL" >> $GITHUB_ENV
+          if [ -z "$BUTLER_API_KEY" ]; then
+            echo "::warning::BUTLER_API_KEY secret is missing or empty. Safely skipping Itch.io deployment."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ -z "$ITCH_USER" ] || [ -z "$ITCH_GAME" ]; then
+            echo "::warning::vars.ITCH_USER or vars.ITCH_GAME is missing or empty. Safely skipping Itch.io deployment."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "skip=false" >> $GITHUB_OUTPUT
 
-      - name: Download Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.BUILD_LABEL }}
-          path: output/
-
-      - name: Install Butler & Push with Channel Tags
+      - name: Install Butler & Push to Itch.io
+        id: deploy-itch
+        if: steps.unity-builder.outcome == 'success' && inputs.deploy_itch && steps.validate-itch.outputs.skip != 'true'
         env:
           BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
           ITCH_USER: ${{ vars.ITCH_USER }}
@@ -274,11 +280,10 @@ jobs:
           curl -L -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
           unzip butler.zip
           chmod +x butler
-          # Pushes to channel e.g. 'windows', 'html5', 'android' and sets version tag
-          ./butler push output/ $ITCH_USER/$ITCH_GAME:${{ matrix.itchChannel }} --userversion ${{ env.VERSION }}
+          ./butler push "build/${{ env.BUILD_LABEL }}" $ITCH_USER/$ITCH_GAME:${{ matrix.itchChannel }} --userversion ${{ env.VERSION }}
 
       - name: Notify Discord on Itch.io Deploy
-        if: always()
+        if: always() && inputs.deploy_itch && steps.validate-itch.outputs.skip != 'true' && (steps.deploy-itch.outcome == 'success' || steps.deploy-itch.outcome == 'failure')
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -287,7 +292,7 @@ jobs:
             exit 0
           fi
 
-          if [ "${{ job.status }}" = "success" ]; then
+          if [ "${{ steps.deploy-itch.outcome }}" = "success" ]; then
             STATUS_TITLE="🚀 Deployed to Itch.io: ${{ env.GAME_NAME }}"
             COLOR=3066993
           else
@@ -322,39 +327,41 @@ jobs:
 
           curl -s -H "Content-Type: application/json" -X POST -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL" || true
 
-  # 4. Deploy to Steam (Conditional)
-  deploy-steam:
-    needs: [setup-matrix, build]
-    if: inputs.deploy_target == 'steam' || inputs.deploy_target == 'both'
-    name: Steam (${{ matrix.platform }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
-    steps:
-      - name: Set Build Label
+      # --- Deploy to Steam ---
+      - name: Validate Steam Credentials
+        id: validate-steam
+        if: always() && steps.unity-builder.outcome == 'success' && inputs.deploy_steam
+        env:
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          STEAM_APP_ID: ${{ vars.STEAM_APP_ID }}
         run: |
-          BUILD_LABEL="${{ env.GAME_NAME }}-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.architecture }}-${{ matrix.backend }}"
-          echo "BUILD_LABEL=$BUILD_LABEL" >> $GITHUB_ENV
-
-      - name: Download Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.BUILD_LABEL }}
-          path: output/
+          if [ -z "$STEAM_USERNAME" ] || [ -z "$STEAM_CONFIG_VDF" ]; then
+            echo "::warning::Steam secrets (STEAM_USERNAME and/or STEAM_CONFIG_VDF) are missing or empty. Safely skipping Steam deployment."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ -z "$STEAM_APP_ID" ]; then
+            echo "::warning::STEAM_APP_ID repository variable is missing or empty. Safely skipping Steam deployment."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "skip=false" >> $GITHUB_OUTPUT
 
       - name: Upload to Steam
+        id: deploy-steam
+        if: always() && steps.unity-builder.outcome == 'success' && inputs.deploy_steam && steps.validate-steam.outputs.skip != 'true'
         uses: game-ci/steam-deploy@v3
         with:
           username: ${{ secrets.STEAM_USERNAME }}
           configVdf: ${{ secrets.STEAM_CONFIG_VDF }}
           appId: ${{ vars.STEAM_APP_ID }}
           buildDescription: "${{ env.BUILD_LABEL }}"
-          rootPath: output/
-          depot1Path: output/
+          rootPath: build/${{ env.BUILD_LABEL }}
+          depot1Path: build/${{ env.BUILD_LABEL }}
 
       - name: Notify Discord on Steam Deploy
-        if: always()
+        if: always() && inputs.deploy_steam && steps.validate-steam.outputs.skip != 'true' && (steps.deploy-steam.outcome == 'success' || steps.deploy-steam.outcome == 'failure')
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -363,7 +370,7 @@ jobs:
             exit 0
           fi
 
-          if [ "${{ job.status }}" = "success" ]; then
+          if [ "${{ steps.deploy-steam.outcome }}" = "success" ]; then
             STATUS_TITLE="🚀 Deployed to Steam: ${{ env.GAME_NAME }}"
             COLOR=3066993
           else

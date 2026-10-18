@@ -10,7 +10,7 @@ A button-triggered on-demand compilation and distribution pipeline:
 * **Manual button-triggered builds (`workflow_dispatch`)** — 0 minutes burned on normal commits.
 * **Auto-incrementing version numbers:** `$GAME_NAME-$VERSION-$PLATFORM-$ARCHITECTURE-$SCRIPTING_BACKEND` (e.g. `TemplateProject-1.0.1-PC-Windows-x64-Mono.zip`).
 * **Multi-platform selection:** Interactive checkboxes for Windows, WebGL, Android, macOS, and Linux that compile concurrently in parallel runners.
-* **Smart CD Routing:** Choose between direct download (`raw_download`), Itch.io (Butler channel tags), Steam (SteamCMD), or both.
+* **Flexible Delivery Checkboxes:** Independent toggles for Direct .zip Download (`raw_download`), Itch.io (Butler), and Steam (SteamCMD) — executed directly on the same runner with safe missing-secret skips.
 * **Automatic artifact cleanup:** Zips expire after 7 days to preserve storage quota.
 
 ---
