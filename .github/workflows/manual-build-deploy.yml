@@ -25,9 +25,9 @@ on:
         type: boolean
         default: false
 
-      # Scripting Backend Toggle
+      # Scripting Backend Toggle (Desktop: Windows / macOS / Linux)
       scripting_backend:
-        description: "Scripting Backend"
+        description: "Scripting Backend (Desktop only; WebGL & Android are IL2CPP)"
         type: choice
         required: true
         default: "Mono"
@@ -90,11 +90,12 @@ jobs:
           fi
 
           if [ "${{ inputs.build_android }}" = "true" ]; then
-            TARGETS=$(echo $TARGETS | jq --arg b "$BACKEND" '. + [{
+            # Android ARM64 requires IL2CPP (Mono does not support 64-bit Android)
+            TARGETS=$(echo $TARGETS | jq '. + [{
               targetPlatform: "Android",
               platform: "Android",
               architecture: "ARM64",
-              backend: $b,
+              backend: "IL2CPP",
               itchChannel: "android",
               depotId: "3"
             }]')
