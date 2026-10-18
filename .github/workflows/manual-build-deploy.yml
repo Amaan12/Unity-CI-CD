@@ -121,8 +121,9 @@ jobs:
           fi
 
           COUNT=$(echo $TARGETS | jq '. | length')
-          echo "Generated matrix: $TARGETS"
-          echo "matrix=$TARGETS" >> $GITHUB_OUTPUT
+          COMPACT_MATRIX=$(echo $TARGETS | jq -c .)
+          echo "Generated matrix: $COMPACT_MATRIX"
+          echo "matrix=$COMPACT_MATRIX" >> $GITHUB_OUTPUT
           echo "has_platforms=$COUNT" >> $GITHUB_OUTPUT
 
   # 2. Build each selected platform in parallel
