@@ -1,4 +1,4 @@
-# Unity CI/CD On-Demand Appliance
+# Unity CI/CD (_Github Actions_)
 
 Turnkey GitHub Actions pipelines for Unity game development and store releases.
 
