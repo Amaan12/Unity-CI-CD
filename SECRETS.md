@@ -11,14 +11,14 @@ Click **New repository secret**:
 
 | Secret Name | Required? | Description |
 | :--- | :---: | :--- |
-| `UNITY_LICENSE` | **YES (Required for CI)** | The XML content of your Unity `.ulf` license file. <br>*(See below on how to get it)*. |
+| `UNITY_LICENSE` | **YES (Required for CI)** | The XML content of your Unity `.ulf` license file from `C:\ProgramData\Unity\Unity_lic.ulf`. |
 | `BUTLER_API_KEY` | *Optional (Only for Itch CD)* | Your API key from [itch.io/user/settings/api-keys](https://itch.io/user/settings/api-keys). |
 | `STEAM_USERNAME` | *Optional (Only for Steam CD)* | Your Steamworks developer account username. |
 | `STEAM_CONFIG_VDF` | *Optional (Only for Steam CD)* | Raw or base64-encoded `config.vdf` containing Steam Guard authorization. |
 
 > [!NOTE]
-> **For Raw Builds (`raw_download`):**
-> You **ONLY** need `UNITY_LICENSE`! All Itch and Steam secrets can be left blank until you are ready to test automatic store publishing.
+> **No Unity Account Email or Password Needed!**
+> Because you use your locally activated `Unity_lic.ulf` file, Unity operates in offline manual license mode. No email or password secrets are needed.
 
 ---
 
