@@ -1,0 +1,238 @@
+name: Build & Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      # Platform Multi-Select (Checkboxes)
+      build_windows:
+        description: "Build Windows (PC x64)"
+        type: boolean
+        default: true
+      build_webgl:
+        description: "Build WebGL (Wasm)"
+        type: boolean
+        default: false
+      build_android:
+        description: "Build Android (ARM64)"
+        type: boolean
+        default: false
+      build_mac:
+        description: "Build macOS (Universal)"
+        type: boolean
+        default: false
+      build_linux:
+        description: "Build Linux (x64)"
+        type: boolean
+        default: false
+
+      # Scripting Backend Toggle
+      scripting_backend:
+        description: "Scripting Backend"
+        type: choice
+        required: true
+        default: "Mono"
+        options:
+          - "Mono"
+          - "IL2CPP"
+
+      # CD Target (Dropdown)
+      deploy_target:
+        description: "Deployment Destination"
+        type: choice
+        required: true
+        default: "raw_download"
+        options:
+          - "raw_download"
+          - "itch"
+          - "steam"
+          - "both"
+
+env:
+  GAME_NAME: ${{ github.event.repository.name }}
+  VERSION: "1.0.${{ github.run_number }}"
+
+jobs:
+  # 1. Parse checked platform boxes into a rich metadata matrix
+  setup-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has_platforms: ${{ steps.set-matrix.outputs.has_platforms }}
+    steps:
+      - id: set-matrix
+        run: |
+          TARGETS="[]"
+          BACKEND="${{ inputs.scripting_backend }}"
+
+          if [ "${{ inputs.build_windows }}" = "true" ]; then
+            TARGETS=$(echo $TARGETS | jq --arg b "$BACKEND" '. + [{
+              targetPlatform: "StandaloneWindows64",
+              platform: "PC-Windows",
+              architecture: "x64",
+              backend: $b,
+              itchChannel: "windows",
+              depotId: "1"
+            }]')
+          fi
+
+          if [ "${{ inputs.build_webgl }}" = "true" ]; then
+            # WebGL is always IL2CPP / Wasm
+            TARGETS=$(echo $TARGETS | jq '. + [{
+              targetPlatform: "WebGL",
+              platform: "WebGL",
+              architecture: "wasm",
+              backend: "IL2CPP",
+              itchChannel: "html5",
+              depotId: "2"
+            }]')
+          fi
+
+          if [ "${{ inputs.build_android }}" = "true" ]; then
+            TARGETS=$(echo $TARGETS | jq --arg b "$BACKEND" '. + [{
+              targetPlatform: "Android",
+              platform: "Android",
+              architecture: "ARM64",
+              backend: $b,
+              itchChannel: "android",
+              depotId: "3"
+            }]')
+          fi
+
+          if [ "${{ inputs.build_mac }}" = "true" ]; then
+            TARGETS=$(echo $TARGETS | jq --arg b "$BACKEND" '. + [{
+              targetPlatform: "StandaloneOSX",
+              platform: "macOS",
+              architecture: "Universal",
+              backend: $b,
+              itchChannel: "mac",
+              depotId: "4"
+            }]')
+          fi
+
+          if [ "${{ inputs.build_linux }}" = "true" ]; then
+            TARGETS=$(echo $TARGETS | jq --arg b "$BACKEND" '. + [{
+              targetPlatform: "StandaloneLinux64",
+              platform: "Linux",
+              architecture: "x64",
+              backend: $b,
+              itchChannel: "linux",
+              depotId: "5"
+            }]')
+          fi
+
+          COUNT=$(echo $TARGETS | jq '. | length')
+          echo "Generated matrix: $TARGETS"
+          echo "matrix=$TARGETS" >> $GITHUB_OUTPUT
+          echo "has_platforms=$COUNT" >> $GITHUB_OUTPUT
+
+  # 2. Build each selected platform in parallel
+  build:
+    needs: setup-matrix
+    if: needs.setup-matrix.outputs.has_platforms != '0'
+    name: Build (${{ matrix.platform }}-${{ matrix.architecture }}-${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-${{ matrix.targetPlatform }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-${{ matrix.targetPlatform }}-
+            Library-
+
+      - name: Build Unity Project
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          targetPlatform: ${{ matrix.targetPlatform }}
+          versioning: Custom
+          version: ${{ env.VERSION }}
+          buildsPath: build
+
+      - name: Package & Name Build Artifact
+        run: |
+          BUILD_LABEL="${{ env.GAME_NAME }}-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.architecture }}-${{ matrix.backend }}"
+          echo "BUILD_LABEL=$BUILD_LABEL" >> $GITHUB_ENV
+          mv "build/${{ matrix.targetPlatform }}" "build/$BUILD_LABEL"
+
+      - name: Upload Build Artifact (.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BUILD_LABEL }}
+          path: build/${{ env.BUILD_LABEL }}
+          retention-days: 7
+
+  # 3. Deploy to Itch.io (Conditional)
+  deploy-itch:
+    needs: [setup-matrix, build]
+    if: inputs.deploy_target == 'itch' || inputs.deploy_target == 'both'
+    name: Itch.io (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
+    steps:
+      - name: Set Build Label
+        run: |
+          BUILD_LABEL="${{ env.GAME_NAME }}-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.architecture }}-${{ matrix.backend }}"
+          echo "BUILD_LABEL=$BUILD_LABEL" >> $GITHUB_ENV
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BUILD_LABEL }}
+          path: output/
+
+      - name: Install Butler & Push with Channel Tags
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          ITCH_USER: ${{ vars.ITCH_USER }}
+          ITCH_GAME: ${{ vars.ITCH_GAME }}
+        run: |
+          curl -L -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+          unzip butler.zip
+          chmod +x butler
+          # Pushes to channel e.g. 'windows', 'html5', 'android' and sets version tag
+          ./butler push output/ $ITCH_USER/$ITCH_GAME:${{ matrix.itchChannel }} --userversion ${{ env.VERSION }}
+
+  # 4. Deploy to Steam (Conditional)
+  deploy-steam:
+    needs: [setup-matrix, build]
+    if: inputs.deploy_target == 'steam' || inputs.deploy_target == 'both'
+    name: Steam (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
+    steps:
+      - name: Set Build Label
+        run: |
+          BUILD_LABEL="${{ env.GAME_NAME }}-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.architecture }}-${{ matrix.backend }}"
+          echo "BUILD_LABEL=$BUILD_LABEL" >> $GITHUB_ENV
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BUILD_LABEL }}
+          path: output/
+
+      - name: Upload to Steam
+        uses: game-ci/steam-deploy@v3
+        with:
+          username: ${{ secrets.STEAM_USERNAME }}
+          configVdf: ${{ secrets.STEAM_CONFIG_VDF }}
+          appId: ${{ vars.STEAM_APP_ID }}
+          buildDescription: "${{ env.BUILD_LABEL }}"
+          rootPath: output/
+          depot1Path: output/
