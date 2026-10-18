@@ -34,7 +34,8 @@ git push origin main
 
 ## Configuration
 
-See [SECRETS.md](file:///C:/Users/imama/Desktop/Unity-CI-CD/SECRETS.md) for full secret names and variables.
+See [SECRETS.md](SECRETS.md) for full setup instructions.
 
-* **For Raw Downloads:** You only need `UNITY_LICENSE`.
+* **Required Secrets:** `UNITY_LICENSE`, `UNITY_EMAIL`, `UNITY_PASSWORD`.
+* **Optional Secrets for Stores:** `BUTLER_API_KEY` (Itch), `STEAM_USERNAME` + `STEAM_CONFIG_VDF` (Steam).
 * **Before Building:** Ensure **Build Addressables on Player Build** is enabled in Unity if your project uses Addressables.
